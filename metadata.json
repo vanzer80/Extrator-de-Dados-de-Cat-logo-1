@@ -1,0 +1,5 @@
+{
+  "name": "Copy of Catalog Data Extractor",
+  "description": "An application to faithfully extract product data and images from PDF catalogs, allowing users to export the structured information into JSON, CSV, and Markdown formats for e-commerce and data management purposes.",
+  "requestFramePermissions": []
+}

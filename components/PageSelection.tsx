@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist/build/pdf';
 import { useTranslation } from '../hooks/useTranslation';
 
@@ -14,6 +14,26 @@ interface PageSelectionProps {
   disabled: boolean;
 }
 
+// Hook for lazy loading
+const useOnScreen = (ref: React.RefObject<HTMLElement>) => {
+    const [isIntersecting, setIntersecting] = useState(false);
+    useEffect(() => {
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if(entry.isIntersecting) {
+                    setIntersecting(true);
+                    // Once visible, stop observing (keep rendered)
+                    if (ref.current) observer.unobserve(ref.current);
+                }
+            },
+            { rootMargin: '100px' } // Load slightly before it scrolls into view
+        );
+        if (ref.current) observer.observe(ref.current);
+        return () => observer.disconnect();
+    }, [ref]);
+    return isIntersecting;
+}
+
 const PageThumbnail: React.FC<{
   pdf: pdfjsLib.PDFDocumentProxy;
   pageNumber: number;
@@ -22,8 +42,12 @@ const PageThumbnail: React.FC<{
   disabled: boolean;
 }> = ({ pdf, pageNumber, isSelected, onSelect, disabled }) => {
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  const isVisible = useOnScreen(ref);
 
   useEffect(() => {
+    if (!isVisible || thumbnailUrl) return;
+
     let isMounted = true;
     const renderThumbnail = async () => {
       try {
@@ -46,10 +70,11 @@ const PageThumbnail: React.FC<{
     };
     renderThumbnail();
     return () => { isMounted = false; };
-  }, [pdf, pageNumber]);
+  }, [pdf, pageNumber, isVisible, thumbnailUrl]);
 
   return (
     <div
+      ref={ref}
       onClick={() => !disabled && onSelect(pageNumber, !isSelected)}
       className={`relative rounded-md overflow-hidden border-2 transition-all
         ${isSelected ? 'border-sky-500' : 'border-transparent hover:border-sky-600'}
@@ -60,7 +85,10 @@ const PageThumbnail: React.FC<{
         {thumbnailUrl ? (
           <img src={thumbnailUrl} alt={`Page ${pageNumber}`} className="object-contain w-full h-full" />
         ) : (
-          <div className="animate-pulse w-full h-full bg-gray-600"></div>
+          <div className="animate-pulse w-full h-full bg-gray-600/50 flex items-center justify-center">
+             {/* Simple placeholder while lazy loading/rendering */}
+             <span className="text-gray-500 text-xs">...</span>
+          </div>
         )}
       </div>
       <div className="absolute bottom-1 right-1 bg-gray-900/70 text-white text-xs px-1.5 py-0.5 rounded">

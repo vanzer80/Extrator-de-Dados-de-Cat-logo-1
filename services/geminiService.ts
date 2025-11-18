@@ -1,164 +1,163 @@
-import { GoogleGenAI, GenerateContentParameters, Type } from "@google/genai";
-import { ImageInfo, ProductData, ApiKeyConfig } from '../types';
+import { GoogleGenAI, Type } from '@google/genai';
+import { ImageInfo, ProductData } from '../types';
 
-const getAiClient = (config: ApiKeyConfig): GoogleGenAI => {
-    let apiKey: string | undefined;
-    if (config.mode === 'custom') {
-        apiKey = config.customKey;
-    } else {
-        apiKey = process.env.API_KEY;
-    }
+type ExtractedProductData = Omit<ProductData, 'origem' | 'imagens'>;
 
-    if (!apiKey) {
-        throw new Error("API Key not found. Please configure it in the settings.");
-    }
-    return new GoogleGenAI({ apiKey });
-};
+/**
+ * Helper function to extract valid JSON array from a potentially dirty string.
+ * LLMs often add conversational text before or after the JSON block.
+ */
+const extractJsonArray = (text: string): any[] | null => {
+    if (!text) return null;
 
-const productSchema = {
-  type: Type.OBJECT,
-  properties: {
-    products: {
-      type: Type.ARRAY,
-      description: 'List of all products found on the page.',
-      items: {
-        type: Type.OBJECT,
-        description: 'A single product extracted from the page.',
-        properties: {
-            produto_nome: { type: Type.STRING, description: 'Product name or title.' },
-            modelo: { type: Type.STRING, description: 'Product model identifier, if available.' },
-            codigo: { type: Type.STRING, description: 'Product code or SKU, if available.' },
-            categoria: { type: Type.STRING, description: 'Product category.' },
-            descricao: { type: Type.STRING, description: 'A brief description of the product.' },
-            especificacoes: {
-                type: Type.ARRAY,
-                description: 'List of technical specifications.',
-                items: {
-                    type: Type.OBJECT,
-                    properties: {
-                        key: { type: Type.STRING, description: 'The name of the specification (e.g., "Voltage").' },
-                        value: { type: Type.STRING, description: 'The value of the specification (e.g., "220V").' }
-                    },
-                    required: ['key', 'value']
-                }
-            },
-            avisos: {
-                type: Type.ARRAY,
-                description: 'Any warnings or important notes about the extraction for this product.',
-                items: { type: Type.STRING }
-            }
-        },
-        required: ['produto_nome', 'especificacoes']
-      }
-    }
-  },
-  required: ['products']
-};
+    // 1. Try to find the first '[' and the last ']'
+    const firstBracket = text.indexOf('[');
+    const lastBracket = text.lastIndexOf(']');
 
-const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
-
-const parseGeminiError = (error: any): string => {
-    if (typeof error === 'object' && error !== null && 'message' in error) {
-        // Attempt to parse nested JSON if the message is a stringified JSON
+    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+        const potentialJson = text.substring(firstBracket, lastBracket + 1);
         try {
-            const nestedError = JSON.parse(error.message);
-            if (nestedError.error && nestedError.error.message) {
-                return nestedError.error.message;
-            }
+            return JSON.parse(potentialJson);
         } catch (e) {
-            // Not a JSON string, fall through to use the original message
+            console.warn("Found brackets but failed to parse inner content", e);
+            // Fallback to cleaning markdown if simple extraction fails
         }
-        return error.message;
     }
-    return String(error);
-}
 
-export const extractProductInfo = async (
-  image: ImageInfo,
-  language: 'en' | 'pt' = 'en',
-  apiKeyConfig: ApiKeyConfig,
-  addLog: (message: string) => void
-): Promise<ProductData[]> => {
-  const genAI = getAiClient(apiKeyConfig);
-  const model = 'gemini-2.5-flash';
-
-  const langInstruction = language === 'pt' 
-    ? "Analise a imagem da página do catálogo. Extraia informações detalhadas para cada produto listado. Retorne os dados no esquema JSON fornecido. Se um campo não for encontrado, use `null`. Mantenha os valores de especificação exatamente como estão no texto original. O nome do produto (`produto_nome`) é obrigatório."
-    : "Analyze the catalog page image. Extract detailed information for each product listed. Return the data in the provided JSON schema. If a field isn't found, use `null`. Keep specification values exactly as they are in the original text. The product name (`produto_nome`) is mandatory.";
-
-  const request: GenerateContentParameters = {
-    model,
-    contents: [
-      {
-        parts: [
-          { text: langInstruction },
-          {
-            inlineData: {
-              mimeType: 'image/jpeg',
-              data: image.base64.split(',')[1],
-            },
-          },
-        ],
-      },
-    ],
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: productSchema
-    }
-  };
-
-  const MAX_RETRIES = 5;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    // 2. Fallback: Remove markdown code blocks and try parsing the whole string
+    const cleanText = text.replace(/```json\n?|```/g, '').trim();
     try {
-      const response = await genAI.models.generateContent(request);
-      
-      const text = response.text;
-      if (!text) {
-          console.error("Gemini API returned an empty response text.");
-          return [];
-      }
+        const parsed = JSON.parse(cleanText);
+        if (Array.isArray(parsed)) return parsed;
+        return null;
+    } catch (e) {
+        return null;
+    }
+};
 
-      const result = JSON.parse(text);
-
-      if (!result.products || !Array.isArray(result.products)) {
-        console.warn('JSON response is not in the expected format:', result);
-        return [];
-      }
-
-      const extractedProducts: ProductData[] = result.products.map((p: any) => ({
-        ...p,
-        especificacoes: p.especificacoes || [],
-        imagens: [
-          {
-            filename: image.filename,
-            page: image.page,
-            hash: image.hash,
-            base64: image.base64
-          }
-        ],
-        origem: {
-          source_pdf: image.filename.replace(/-page-\\d+\\.jpg$/, ''),
-          page: image.page,
-        },
-      }));
-
-      return extractedProducts; // Success, exit the loop
-
-    } catch (error: any) {
-      console.error(`Error calling Gemini API (attempt ${attempt}):`, error);
-      const errorMessage = parseGeminiError(error);
-      
-      const isRateLimitError = error.toString().includes('429') || errorMessage.includes('quota');
-
-      if (isRateLimitError && attempt < MAX_RETRIES) {
-        const delayDuration = (2 ** attempt) * 1000 + Math.random() * 1000;
-        addLog(`Pausing for ${(delayDuration / 1000).toFixed(1)}s to manage API rate limits (attempt ${attempt}/${MAX_RETRIES})...`);
-        await delay(delayDuration);
-      } else {
-        throw new Error(`Failed to extract product information from Gemini: ${errorMessage}`);
-      }
+/**
+ * Extracts product data from a single page image using the Gemini API.
+ * @param imageInfo The image information for the page.
+ * @param prompt The prompt to guide the extraction.
+ * @param apiKey The API key for authenticating with the Gemini API.
+ * @returns A promise that resolves to an array of ProductData objects.
+ */
+export const extractProductDataFromPage = async (
+  imageInfo: ImageInfo,
+  prompt: string,
+  apiKey: string
+): Promise<ProductData[]> => {
+  if (!apiKey) {
+    apiKey = process.env.API_KEY || '';
+    if (!apiKey) {
+      throw new Error('API Key is required. Please set it in the settings or as an environment variable.');
     }
   }
-  // This line is only reached if all retries fail.
-  throw new Error('Failed to extract product information from Gemini after multiple attempts.');
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  // Use Flash model for speed and cost efficiency on high volume
+  const model = 'gemini-2.5-flash';
+
+  if (!imageInfo.base64.startsWith('data:image/jpeg;base64,')) {
+    throw new Error('Invalid base64 image format. Expected JPEG.');
+  }
+  const base64Data = imageInfo.base64.split(',')[1];
+
+  const imagePart = {
+    inlineData: {
+      mimeType: 'image/jpeg',
+      data: base64Data,
+    },
+  };
+
+  const textPart = {
+    text: prompt,
+  };
+
+  // Schema aligned with Nuvemshop requirements
+  const responseSchema = {
+    type: Type.ARRAY,
+    description: "List of products found on the page with Nuvemshop specific fields.",
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        nome: { type: Type.STRING, description: "Product Name" },
+        modelo: { type: Type.STRING, description: "Product Model, Application, or Compatible Model." },
+        descricao: { type: Type.STRING, description: "Product Description" },
+        codigo: { type: Type.STRING, description: "Generic Code, Reference (Ref) or ID visible." },
+        sku: { type: Type.STRING, description: "Explicit SKU/Ref/Code found in text. DO NOT use Model Name. If not found, return null." },
+        codigo_barras: { type: Type.STRING, description: "Barcode / EAN / GTIN" },
+        ncm: { type: Type.STRING, description: "NCM Code. Null if not explicitly found." },
+        categoria: { type: Type.STRING, description: "Product Category" },
+        
+        // Dimensions & Weight
+        peso_kg: { type: Type.STRING, description: "Weight in KG" },
+        altura_cm: { type: Type.STRING, description: "Height in CM" },
+        largura_cm: { type: Type.STRING, description: "Width in CM" },
+        comprimento_cm: { type: Type.STRING, description: "Length in CM" },
+
+        // Google Shopping / Instagram
+        mpn: { type: Type.STRING, description: "Manufacturer Part Number" },
+        faixa_etaria: { type: Type.STRING, description: "Age Group (e.g. adult, child)" },
+        sexo: { type: Type.STRING, description: "Gender (e.g. female, male, unisex)" }
+      },
+    },
+  };
+
+  try {
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: { parts: [imagePart, textPart] },
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: responseSchema,
+        temperature: 0.0, // Strict extraction, no creativity
+      },
+    });
+
+    const jsonString = response.text;
+    
+    if (!jsonString) {
+        console.warn(`Received empty response for page ${imageInfo.page}`);
+        return [];
+    }
+
+    const extractedData = extractJsonArray(jsonString);
+
+    if (!extractedData) {
+        console.error(`Failed to parse JSON for page ${imageInfo.page}. Raw content snippet:`, jsonString.substring(0, 100));
+        return [];
+    }
+
+    // Map to internal structure adding metadata
+    const productsWithOrigin: ProductData[] = extractedData.map((product: any) => ({
+      ...product,
+      origem: {
+        source_pdf: imageInfo.filename.split('-page-')[0], // Extract PDF name
+        page: imageInfo.page,
+      },
+      imagens: [imageInfo]
+    }));
+
+    return productsWithOrigin;
+  } catch (error) {
+    console.error(`Error calling Gemini API for page ${imageInfo.page}:`, error);
+    
+    // Enhanced error categorization
+    let errorMessage = `Failed to process page ${imageInfo.page}.`;
+    if (error instanceof Error) {
+      // Check for common API errors
+      if (error.message.includes('401') || error.message.includes('API key')) {
+        throw new Error('AUTH_ERROR: The provided API Key is not valid.');
+      } 
+      if (error.message.includes('429')) {
+         throw new Error('QUOTA_ERROR: API rate limit exceeded.');
+      }
+      errorMessage += ` ${error.message}`;
+    } else {
+      errorMessage += ` ${String(error)}`;
+    }
+    throw new Error(errorMessage);
+  }
 };

@@ -1,104 +1,121 @@
 import { ProductData } from '../types';
 
-// Function to trigger file download
-const downloadFile = (content: string, fileName: string, mimeType: string) => {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
+/**
+ * Triggers a file download in the browser.
+ * @param content The content of the file.
+ * @param fileName The name of the file to be downloaded.
+ * @param contentType The MIME type of the file.
+ */
+const downloadFile = (content: string, fileName: string, contentType: string) => {
+  const a = document.createElement("a");
+  const file = new Blob([content], { type: contentType });
+  a.href = URL.createObjectURL(file);
   a.download = fileName;
-  document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  URL.revokeObjectURL(a.href);
 };
 
-// --- JSON ---
-export const exportAsJson = (data: ProductData[], fileName: string = 'extracao.json') => {
+/**
+ * Exports product data to a JSON file.
+ * @param data The array of ProductData to export.
+ */
+export const exportToJSON = (data: ProductData[]) => {
   const jsonString = JSON.stringify(data, null, 2);
-  downloadFile(jsonString, fileName, 'application/json');
+  downloadFile(jsonString, 'nuvemshop_products.json', 'application/json');
 };
 
-export const copyJson = (data: ProductData[]) => {
-  const jsonString = JSON.stringify(data, null, 2);
-  navigator.clipboard.writeText(jsonString).catch(err => console.error('Failed to copy JSON:', err));
-};
 
-// --- CSV ---
-const convertToCsv = (data: ProductData[]): string => {
-  if (data.length === 0) return '';
+/**
+ * Converts a value to a CSV-safe string.
+ * @param value The value to convert.
+ */
+const toCSVString = (value: any): string => {
+  if (value === null || value === undefined) {
+    return '';
+  }
   
+  // For objects or arrays, stringify them.
+  if (typeof value === 'object') {
+    value = JSON.stringify(value);
+  }
+
+  let str = String(value);
+
+  // If the string contains a comma, double quote, or newline, wrap it in double quotes.
+  // Also escape double quotes by doubling them.
+  if (str.search(/("|,|\n|\r)/g) >= 0) {
+    str = '"' + str.replace(/"/g, '""') + '"';
+  }
+  return str;
+};
+
+
+/**
+ * Converts product data to a CSV string.
+ * @param data The array of ProductData to convert.
+ */
+const convertToCSV = (data: ProductData[]): string => {
+  if (data.length === 0) {
+    return '';
+  }
+  
+  // Headers based on Nuvemshop requirements
   const headers = [
-    'produto_nome', 'modelo', 'codigo', 'categoria', 'descricao', 
-    'especificacoes_json', 'imagens_json', 'source_pdf', 'page'
+    'Nome',
+    'Modelo',
+    'Descrição',
+    'Código',
+    'SKU',
+    'Código de barras',
+    'NCM',
+    'Categoria',
+    'Peso (kg)',
+    'Altura (cm)',
+    'Largura (cm)',
+    'Comprimento (cm)',
+    'MPN',
+    'Faixa Etária',
+    'Sexo',
+    'Origem PDF',
+    'Origem Pagina'
   ];
-  
+
   const csvRows = [headers.join(',')];
 
-  data.forEach(item => {
-    const row = [
-      `"${item.produto_nome || ''}"`,
-      `"${item.modelo || ''}"`,
-      `"${item.codigo || ''}"`,
-      `"${item.categoria || ''}"`,
-      `"${(item.descricao || '').replace(/"/g, '""')}"`,
-      `"${JSON.stringify(item.especificacoes).replace(/"/g, '""')}"`,
-      `"${JSON.stringify(item.imagens.map(img => ({filename: img.filename, page: img.page}))).replace(/"/g, '""')}"`,
-      `"${item.origem.source_pdf}"`,
-      item.origem.page,
+  for (const product of data) {
+    const values = [
+      toCSVString(product.nome),
+      toCSVString(product.modelo),
+      toCSVString(product.descricao),
+      toCSVString(product.codigo),
+      toCSVString(product.sku),
+      toCSVString(product.codigo_barras),
+      toCSVString(product.ncm),
+      toCSVString(product.categoria),
+      toCSVString(product.peso_kg),
+      toCSVString(product.altura_cm),
+      toCSVString(product.largura_cm),
+      toCSVString(product.comprimento_cm),
+      toCSVString(product.mpn),
+      toCSVString(product.faixa_etaria),
+      toCSVString(product.sexo),
+      toCSVString(product.origem.source_pdf),
+      toCSVString(product.origem.page),
     ];
-    csvRows.push(row.join(','));
-  });
+    csvRows.push(values.join(','));
+  }
 
   return csvRows.join('\n');
 };
 
-export const exportAsCsv = (data: ProductData[], fileName: string = 'extracao.csv') => {
-  const csvString = convertToCsv(data);
-  downloadFile(csvString, fileName, 'text/csv;charset=utf-8;');
-};
 
-export const copyCsv = (data: ProductData[]) => {
-  const csvString = convertToCsv(data);
-  navigator.clipboard.writeText(csvString).catch(err => console.error('Failed to copy CSV:', err));
-};
-
-// --- Markdown ---
-const convertToMarkdown = (data: ProductData[]): string => {
-  if (data.length === 0) return '';
-
-  return data.map(item => {
-    const title = `## ${item.produto_nome || 'Unnamed Product'} (${item.modelo || 'N/A'} | ${item.codigo || 'N/A'})`;
-    
-    const category = item.categoria ? `**Category:** ${item.categoria}\n` : '';
-    
-    const description = item.descricao ? `### Description\n\n${item.descricao}\n` : '';
-
-    let specsTable = '';
-    if (item.especificacoes && item.especificacoes.length > 0) {
-      specsTable = '### Specifications\n\n| Parameter | Value |\n|---|---|\n';
-      item.especificacoes.forEach(({ key, value }) => {
-        specsTable += `| ${key} | ${value} |\n`;
-      });
-    }
-
-    let imagesList = '### Images\n\n';
-    item.imagens.forEach(img => {
-      imagesList += `- ${img.filename} (from page ${img.page})\n`;
-    });
-    
-    const origin = `\n---\n*Source: ${item.origem.source_pdf}, Page: ${item.origem.page}*\n\n`;
-
-    return [title, category, description, specsTable, imagesList, origin].join('\n');
-  }).join('');
-};
-
-export const exportAsMarkdown = (data: ProductData[], fileName: string = 'extracao.md') => {
-  const mdString = convertToMarkdown(data);
-  downloadFile(mdString, fileName, 'text/markdown;charset=utf-8;');
-};
-
-export const copyMarkdown = (data: ProductData[]) => {
-  const mdString = convertToMarkdown(data);
-  navigator.clipboard.writeText(mdString).catch(err => console.error('Failed to copy Markdown:', err));
+/**
+ * Exports product data to a CSV file.
+ * @param data The array of ProductData to export.
+ */
+export const exportToCSV = (data: ProductData[]) => {
+  // Add Byte Order Mark (BOM) for Excel UTF-8 compatibility
+  const bom = '\uFEFF';
+  const csvString = bom + convertToCSV(data);
+  downloadFile(csvString, 'nuvemshop_products.csv', 'text/csv;charset=utf-8;');
 };

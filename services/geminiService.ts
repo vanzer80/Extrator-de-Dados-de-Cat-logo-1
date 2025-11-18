@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from '@google/genai';
 import { ImageInfo, ProductData } from '../types';
 
@@ -40,12 +41,14 @@ const extractJsonArray = (text: string): any[] | null => {
  * @param imageInfo The image information for the page.
  * @param prompt The prompt to guide the extraction.
  * @param apiKey The API key for authenticating with the Gemini API.
- * @returns A promise that resolves to an array of ProductData objects.
+ * @param extractImages Boolean to enable/disable image cropping instructions
+ * @returns A promise that resolves to an array of ProductData objects (without the cropped image bytes yet).
  */
 export const extractProductDataFromPage = async (
   imageInfo: ImageInfo,
   prompt: string,
-  apiKey: string
+  apiKey: string,
+  extractImages: boolean
 ): Promise<ProductData[]> => {
   if (!apiKey) {
     apiKey = process.env.API_KEY || '';
@@ -56,7 +59,7 @@ export const extractProductDataFromPage = async (
 
   const ai = new GoogleGenAI({ apiKey });
 
-  // Use Flash model for speed and cost efficiency on high volume
+  // Use Flash model for speed and cost efficiency
   const model = 'gemini-2.5-flash';
 
   if (!imageInfo.base64.startsWith('data:image/jpeg;base64,')) {
@@ -71,8 +74,23 @@ export const extractProductDataFromPage = async (
     },
   };
 
+  let finalPrompt = prompt;
+  
+  // Instructions for strict Image Association and Uniqueness
+  if (extractImages) {
+      finalPrompt += `\n\nIMPORTANT INSTRUCTIONS FOR IMAGE EXTRACTION:
+      1. **Bounding Box**: For each product, detect the coordinates of its MAIN image. Return 'box_2d' as [ymin, xmin, ymax, xmax] (0-1000 scale).
+      2. **OBJECT ISOLATION (CRITICAL)**:
+         - EXCLUDE humans, models, hands, feet, or people operating the machine.
+         - EXCLUDE background scenery, floors, or walls.
+         - EXCLUDE floating text overlays, descriptions, or technical specs written on the page background.
+         - FOCUS ONLY on the mechanical equipment/part itself.
+      3. **Tight Fit**: The box must be TIGHT around the metal/plastic of the equipment.
+      4. **Uniqueness**: Select ONLY ONE image per product.`;
+  }
+
   const textPart = {
-    text: prompt,
+    text: finalPrompt,
   };
 
   // Schema aligned with Nuvemshop requirements
@@ -100,7 +118,16 @@ export const extractProductDataFromPage = async (
         // Google Shopping / Instagram
         mpn: { type: Type.STRING, description: "Manufacturer Part Number" },
         faixa_etaria: { type: Type.STRING, description: "Age Group (e.g. adult, child)" },
-        sexo: { type: Type.STRING, description: "Gender (e.g. female, male, unisex)" }
+        sexo: { type: Type.STRING, description: "Gender (e.g. female, male, unisex)" },
+
+        // Image Bounding Box
+        ...(extractImages ? {
+            box_2d: {
+                type: Type.ARRAY,
+                items: { type: Type.INTEGER },
+                description: "Bounding box [ymin, xmin, ymax, xmax] (0-1000 scale)"
+            }
+        } : {})
       },
     },
   };
@@ -112,7 +139,7 @@ export const extractProductDataFromPage = async (
       config: {
         responseMimeType: 'application/json',
         responseSchema: responseSchema,
-        temperature: 0.0, // Strict extraction, no creativity
+        temperature: 0.0, // Strict extraction
       },
     });
 
@@ -131,23 +158,26 @@ export const extractProductDataFromPage = async (
     }
 
     // Map to internal structure adding metadata
-    const productsWithOrigin: ProductData[] = extractedData.map((product: any) => ({
-      ...product,
-      origem: {
-        source_pdf: imageInfo.filename.split('-page-')[0], // Extract PDF name
-        page: imageInfo.page,
-      },
-      imagens: [imageInfo]
-    }));
+    // Note: We do NOT crop images here anymore. We leave that to the main thread 
+    // which has access to the high-res PDF document.
+    const productsWithOrigin: ProductData[] = extractedData.map((product: any) => {
+        return {
+            ...product,
+            imagem_produto_base64: null, // Placeholder, will be filled by App.tsx
+            origem: {
+                source_pdf: imageInfo.filename.split('-page-')[0],
+                page: imageInfo.page,
+            },
+            imagens: [imageInfo]
+        };
+    });
 
     return productsWithOrigin;
   } catch (error) {
     console.error(`Error calling Gemini API for page ${imageInfo.page}:`, error);
     
-    // Enhanced error categorization
     let errorMessage = `Failed to process page ${imageInfo.page}.`;
     if (error instanceof Error) {
-      // Check for common API errors
       if (error.message.includes('401') || error.message.includes('API key')) {
         throw new Error('AUTH_ERROR: The provided API Key is not valid.');
       } 

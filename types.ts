@@ -36,6 +36,12 @@ export interface ProductData {
   faixa_etaria: string | null;
   sexo: string | null;
 
+  // Image Extraction Data
+  // [ymin, xmin, ymax, xmax] in 1000 scale
+  box_2d?: [number, number, number, number] | null; 
+  imagem_produto_base64?: string | null;
+  imagem_arquivo_nome?: string | null; // Used for export
+
   // Internal
   origem: Origin;
   imagens: ImageInfo[];

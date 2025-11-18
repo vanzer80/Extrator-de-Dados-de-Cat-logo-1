@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { ProductData, ProcessingStatus } from '../types';
 import { useTranslation } from '../hooks/useTranslation';
 import ExportControls from './ExportControls';
-import { CopyIcon, XIcon } from './icons';
+import { CopyIcon, XIcon, DownloadIcon } from './icons';
 
 // Props for ResultsView
 interface ResultsViewProps {
@@ -46,6 +46,14 @@ const CopyableField: React.FC<{ label: string; value: string | null }> = ({ labe
 // Main component
 const ResultsView: React.FC<ResultsViewProps> = ({ data, status, onClear }) => {
   const { t } = useTranslation();
+  const hasImages = data.some(p => !!p.imagem_produto_base64);
+
+  const downloadSingleImage = (base64: string, name: string) => {
+      const link = document.createElement('a');
+      link.href = base64;
+      link.download = `${name || 'product'}.jpg`;
+      link.click();
+  }
 
   if (status !== 'success' && data.length === 0) {
     return (
@@ -76,6 +84,12 @@ const ResultsView: React.FC<ResultsViewProps> = ({ data, status, onClear }) => {
         </div>
         {data.length > 0 && <ExportControls data={data} />}
       </div>
+
+      {hasImages && (
+        <div className="mb-4 p-2 bg-sky-900/20 border border-sky-500/30 rounded text-xs text-sky-300 text-center">
+             As imagens foram extraídas. O botão de download baixará um arquivo ZIP contendo planilha e imagens.
+        </div>
+      )}
       
       {data.length > 0 ? (
         <div className="space-y-6 max-h-[calc(100vh-20rem)] overflow-y-auto pr-2">
@@ -84,16 +98,40 @@ const ResultsView: React.FC<ResultsViewProps> = ({ data, status, onClear }) => {
               
               {/* Header with Image and basic info */}
               <div className="flex flex-col sm:flex-row gap-4 mb-4">
-                {product.imagens[0]?.base64 && (
-                  <div className="flex-shrink-0 sm:w-32 bg-white/5 rounded p-1 self-start">
-                    <img 
-                      src={product.imagens[0].base64} 
-                      alt={product.nome || 'Product'} 
-                      className="rounded w-full object-contain"
-                    />
-                    <p className="text-[10px] text-center text-gray-500 mt-1 truncate">{product.origem.source_pdf} (p.{product.origem.page})</p>
-                  </div>
-                )}
+                
+                {/* Prioritize Cropped Image, fallback to Page Image */}
+                <div className="flex-shrink-0 sm:w-32 self-start">
+                    {product.imagem_produto_base64 ? (
+                        <div className="bg-black/30 rounded p-1 border border-sky-500/50 relative group">
+                             <img 
+                                src={product.imagem_produto_base64} 
+                                alt={product.nome || 'Product Cropped'} 
+                                className="rounded w-full object-contain mb-1"
+                                loading="lazy"
+                            />
+                            <button 
+                                onClick={() => downloadSingleImage(product.imagem_produto_base64!, product.sku || product.nome || 'image')}
+                                className="absolute top-2 right-2 bg-gray-900/90 text-white p-1.5 rounded-full shadow-lg hover:bg-sky-600 transition-colors border border-gray-600"
+                                title="Baixar Imagem"
+                            >
+                                <DownloadIcon />
+                            </button>
+                            <p className="text-[9px] text-center text-sky-400 uppercase font-bold">Recorte</p>
+                        </div>
+                    ) : (
+                        product.imagens[0]?.base64 && (
+                            <div className="bg-white/5 rounded p-1">
+                                <img 
+                                src={product.imagens[0].base64} 
+                                alt={product.nome || 'Product Page'} 
+                                className="rounded w-full object-contain"
+                                loading="lazy"
+                                />
+                                <p className="text-[10px] text-center text-gray-500 mt-1 truncate">Página {product.origem.page}</p>
+                            </div>
+                        )
+                    )}
+                </div>
                 
                 <div className="flex-grow space-y-1">
                      <h4 className="text-md font-bold text-sky-400 mb-2">{product.nome || t('resultsUnknownProduct')}</h4>

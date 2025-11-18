@@ -11,7 +11,7 @@ import LanguageSwitcher from './components/LanguageSwitcher';
 import { GithubIcon, SettingsIcon } from './components/icons';
 import { ApiKeyConfig, ProductData, ProcessingStatus, ProcessingProgress } from './types';
 import { useTranslation } from './hooks/useTranslation';
-import { loadPdfDocument, renderSinglePage } from './utils/pageParser';
+import { loadPdfDocument, renderSinglePage, renderHighQualityCrop, extractBestImageForBox } from './utils/pageParser';
 import { extractProductDataFromPage } from './services/geminiService';
 
 const App: React.FC = () => {
@@ -25,6 +25,7 @@ const App: React.FC = () => {
   const [files, setFiles] = useState<File[]>([]);
   const [selectedPages, setSelectedPages] = useState<Map<string, Set<number>>>(new Map<string, Set<number>>());
   const [prompt, setPrompt] = useState('');
+  const [extractImages, setExtractImages] = useState(false); // New State for Image Extraction
   const [results, setResults] = useState<ProductData[]>([]);
 
   // API Key State
@@ -165,7 +166,10 @@ const App: React.FC = () => {
             const pdfDoc = await loadPdfDocument(file);
             const sortedPages = (Array.from(pages) as number[]).sort((a, b) => a - b);
 
-            // 2. Process page by page (Render -> Extract -> Release Memory)
+            // Use standard scale for analysis to save tokens/bandwidth
+            const analysisScale = 1.5;
+
+            // 2. Process page by page (Render -> Extract -> Native Extraction -> Release Memory)
             for (const pageNum of sortedPages) {
                 processedCount++;
                 setProgress({ 
@@ -175,12 +179,47 @@ const App: React.FC = () => {
                 });
 
                 try {
-                    // Render single page
-                    const imageInfo = await renderSinglePage(pdfDoc, pageNum, file.name);
+                    // A. Render single page (Lightweight) for Gemini analysis
+                    const imageInfo = await renderSinglePage(pdfDoc, pageNum, file.name, analysisScale);
                     
-                    // Extract data
-                    const products = await extractProductDataFromPage(imageInfo, prompt, apiKey);
+                    // B. Extract data with AI
+                    const products = await extractProductDataFromPage(imageInfo, prompt, apiKey, extractImages);
                     
+                    // C. High Quality Image Extraction (Native Object or Vector Re-rendering)
+                    if (extractImages && products.length > 0) {
+                        setProgress({ 
+                            current: processedCount, 
+                            total: totalPagesToProcess, 
+                            filename: `${file.name} (p. ${pageNum}) - Extracting Images...` 
+                        });
+
+                        for (const product of products) {
+                            if (product.box_2d) {
+                                let finalImage: string | null = null;
+
+                                // 1. Try Native Extraction (God Mode) first
+                                // This attempts to get the raw bitmap from the PDF
+                                finalImage = await extractBestImageForBox(pdfDoc, pageNum, product.box_2d);
+
+                                // 2. Fallback to High Quality Vector Render if Native fails
+                                // (Safeguarded with max canvas size checks)
+                                if (!finalImage) {
+                                    // console.log("Native extraction failed, falling back to render");
+                                    finalImage = await renderHighQualityCrop(
+                                        pdfDoc, 
+                                        pageNum, 
+                                        product.box_2d, 
+                                        4.0 // High Quality Scale (Limited by MAX_DIM inside function)
+                                    );
+                                }
+
+                                if (finalImage) {
+                                    product.imagem_produto_base64 = finalImage;
+                                }
+                            }
+                        }
+                    }
+
                     // Update results immediately
                     setResults(prev => [...prev, ...products]);
                     
@@ -190,11 +229,9 @@ const App: React.FC = () => {
                     console.error(`Failed to process page ${pageNum} of ${file.name}:`, pageError);
                     
                     // CRITICAL: Circuit Breaker for Auth Errors
-                    // If the API key is wrong, there is no point in trying the next 50 pages.
                     if (pageError.message && pageError.message.includes('AUTH_ERROR')) {
-                        throw new Error(t('apiKeyMissingError')); // Reuse key error message or specific one
+                        throw new Error(t('apiKeyMissingError'));
                     }
-                    
                     // For other errors (like a blurry page), we just log and continue
                 }
             }
@@ -243,7 +280,13 @@ const App: React.FC = () => {
             onDeselectAll={handleDeselectAll}
             disabled={isProcessing}
           />
-          <ExtractionOptions prompt={prompt} onPromptChange={handlePromptChange} disabled={isProcessing} />
+          <ExtractionOptions 
+            prompt={prompt} 
+            onPromptChange={handlePromptChange} 
+            extractImages={extractImages}
+            onExtractImagesChange={setExtractImages}
+            disabled={isProcessing} 
+          />
           <div className="bg-gray-800/50 rounded-lg p-4">
             <button
                 onClick={handleStartProcessing}

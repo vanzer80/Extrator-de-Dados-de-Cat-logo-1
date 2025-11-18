@@ -5,6 +5,8 @@ import { EditIcon, CheckCircleIcon, ChevronDownIcon, ChevronUpIcon, WarningIcon 
 interface ExtractionOptionsProps {
   prompt: string;
   onPromptChange: (prompt: string) => void;
+  extractImages: boolean;
+  onExtractImagesChange: (enabled: boolean) => void;
   disabled: boolean;
 }
 
@@ -52,7 +54,7 @@ export const getDefaultPrompt = (language: 'en' | 'pt') => {
     return language === 'pt' ? DEFAULT_PROMPT_PT : DEFAULT_PROMPT_EN;
 }
 
-const ExtractionOptions: React.FC<ExtractionOptionsProps> = ({ prompt, onPromptChange, disabled }) => {
+const ExtractionOptions: React.FC<ExtractionOptionsProps> = ({ prompt, onPromptChange, extractImages, onExtractImagesChange, disabled }) => {
   const { t, language } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
   
@@ -100,6 +102,32 @@ const ExtractionOptions: React.FC<ExtractionOptionsProps> = ({ prompt, onPromptC
       {/* Expanded View */}
       {isExpanded && (
         <div className="mt-4 animate-fade-in">
+            
+            {/* Image Extraction Toggle */}
+            <div className="mb-4 p-3 bg-gray-900/50 rounded-md border border-gray-700 flex items-center justify-between">
+                <div>
+                    <h4 className="text-sm font-bold text-sky-400 flex items-center gap-2">
+                        {language === 'pt' ? 'Extrair Imagens' : 'Extract Images'}
+                        <span className="text-[10px] bg-sky-900 text-white px-1.5 rounded">BETA</span>
+                    </h4>
+                    <p className="text-xs text-gray-400 mt-1">
+                        {language === 'pt' 
+                            ? 'Recorta imagens em alta resolução diretamente do PDF. O processo será mais lento e gerará um arquivo ZIP.'
+                            : 'Crops high-res images directly from the PDF. Process will be slower and output a ZIP file.'}
+                    </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                        type="checkbox" 
+                        className="sr-only peer" 
+                        checked={extractImages}
+                        onChange={(e) => onExtractImagesChange(e.target.checked)}
+                        disabled={disabled}
+                    />
+                    <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-sky-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
+                </label>
+            </div>
+
             <div className="flex justify-between items-end mb-2">
                  <p className="text-xs text-gray-400 max-w-[80%]">{t('extractionOptionsDescription')}</p>
                  {!isDefault && !disabled && (
